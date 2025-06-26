@@ -1,15 +1,20 @@
 terraform {
   backend "s3" {
-    bucket = "marten-tfstate"
-    key = "stock-lambda/terraform.tfstate"
-    region = "eu-north-1"
+    bucket  = "marten-tfstate"
+    key     = "stock-lambda/terraform.tfstate"
+    region  = "eu-north-1"
     profile = "sec"
   }
 
   required_providers {
     aws = {
-        source = "hashicorp/aws"
-        version = ">= 5.0"
+      source  = "hashicorp/aws"
+      version = ">= 5.0"
+    }
+
+    archive = {
+      source  = "hashicorp/archive"
+      version = "~> 2.7.1"
     }
   }
 
@@ -17,6 +22,6 @@ terraform {
 }
 
 provider "aws" {
-  region = var.region
+  region  = var.region
   profile = "prod"
 }
