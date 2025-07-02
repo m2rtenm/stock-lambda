@@ -1,7 +1,7 @@
 data "archive_file" "stock_lambda" {
   type        = "zip"
-  source_file = "${path.module}/StockAnalyzer.py"
-  output_path = "${path.module}/StockAnalyzer.zip"
+  source_file = "${path.module}/../python/StockAnalyzer.py"
+  output_path = "${path.module}/../python/StockAnalyzer.zip"
 }
 
 

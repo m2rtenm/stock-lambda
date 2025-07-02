@@ -14,13 +14,16 @@ data "aws_iam_policy_document" "stock_lambda" {
     sid       = "SNS"
     effect    = "Allow"
     actions   = ["sns:Publish"]
-    resources = []
+    resources = [aws_sns_topic.stock_lambda.arn]
   }
 
   statement {
-    sid       = "Secrets"
-    actions   = ["secretsmanager:GetSecretValue"]
-    resources = []
+    sid       = "DynamoDB"
+    actions   = [
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+    ]
+    resources = [aws_dynamodb_table.stock_prices.arn]
   }
 }
 

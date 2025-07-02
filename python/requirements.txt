@@ -1,0 +1,2 @@
+yfinance
+boto3
