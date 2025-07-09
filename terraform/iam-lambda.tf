@@ -18,8 +18,8 @@ data "aws_iam_policy_document" "stock_lambda" {
   }
 
   statement {
-    sid       = "DynamoDB"
-    actions   = [
+    sid = "DynamoDB"
+    actions = [
       "dynamodb:GetItem",
       "dynamodb:PutItem",
     ]

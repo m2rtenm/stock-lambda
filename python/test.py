@@ -17,4 +17,4 @@ def check_stock_change(ticker, interval_seconds=5, threshold_pct=1.0):
         
         last_price = new_price
 
-check_stock_change("AAPL", interval_seconds=5, threshold_pct=2.0)
+check_stock_change("NVDA", interval_seconds=5, threshold_pct=2.0)

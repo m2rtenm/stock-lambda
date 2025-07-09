@@ -22,9 +22,9 @@ except ImportError:
 # Load configuration from Lambda environment variables
 STOCK_SYMBOLS = os.environ.get('STOCK_SYMBOLS', 'AAPL,GOOG,TSLA').split(',')
 SNS_TOPIC_ARN = os.environ.get('SNS_TOPIC_ARN')
-THRESHOLD_PERCENT = float(os.environ.get('THRESHOLD_PERCENT', 5.0))
+THRESHOLD_PERCENT = float(os.environ.get('THRESHOLD_PERCENT'))
 DYNAMODB_TABLE_NAME = os.environ.get('DYNAMODB_TABLE_NAME') # New: Table for storing state
-AWS_REGION = os.environ.get('AWS_REGION', 'us-east-1')
+AWS_REGION = os.environ.get('AWS_REGION')
 
 # --- AWS CLIENTS ---
 # Initialize AWS clients outside the handler for reuse
