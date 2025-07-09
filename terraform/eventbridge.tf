@@ -1,7 +1,7 @@
 resource "aws_cloudwatch_event_rule" "stock_lambda" {
   name                = "${var.account_identifier}-${var.lambda_name}-event-rule"
   description         = "Triggers the stock analyzer Lambda function"
-  schedule_expression = "" # TODO: implement cron statement
+  schedule_expression = "rate(15 minutes)"
 }
 
 resource "aws_cloudwatch_event_target" "stock_lambda" {
