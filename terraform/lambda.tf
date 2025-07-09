@@ -1,58 +1,48 @@
 resource "null_resource" "lambda_layer_packer" {
+  # These triggers tell Terraform to re-run this resource if the source files change.
   triggers = {
+    source_code_hash  = filebase64sha256("${path.module}/../python/StockAnalyzer.py")
     requirements_hash = filebase64sha256("${path.module}/../python/requirements.txt")
   }
 
+  # This provisioner runs local shell commands to create the package.
   provisioner "local-exec" {
-    command     = <<-EOT
-      echo "--- Packaging Lambda Layer dependencies ---"
-      LAYER_BUILD_DIR="../python/build/layer"
-      LAYER_ZIP_PATH="../python/dependencies.zip"
+    # These commands are run from your 'terraform' directory.
+    command = <<-EOT
+      echo "--- Packaging Lambda function ---"
+      PACKAGE_DIR="../python/package"
+      ZIP_FILE="../python/StockAnalyzer.zip"
       
-      # Clean up previous build
-      rm -rf $LAYER_BUILD_DIR
-      rm -f $LAYER_ZIP_PATH
+      # Clean up previous package to ensure a fresh build
+      rm -rf $PACKAGE_DIR
+      rm -f $ZIP_FILE
       
-      # Recreate directory with the 'python' subdirectory required by Lambda Layers
-      mkdir -p $LAYER_BUILD_DIR/python
+      # Create package directory and install dependencies from requirements.txt
+      mkdir -p $PACKAGE_DIR
+      pip install -r ../python/requirements.txt -t $PACKAGE_DIR --quiet
       
-      # Install dependencies from requirements.txt into that specific folder
-      pip install -r ../python/requirements.txt -t $LAYER_BUILD_DIR/python --quiet
+      # Copy your source code into the package
+      cp ../python/StockAnalyzer.py $PACKAGE_DIR/
       
-      # Create the zip file from within the build directory
-      cd $LAYER_BUILD_DIR && zip -r $LAYER_ZIP_PATH . -q
-      echo "--- Layer packaging complete ---"
+      # Create the zip file from within the package directory
+      cd $PACKAGE_DIR && zip -r $ZIP_FILE . -q
+      echo "--- Packaging complete ---"
     EOT
+    # Using bash is recommended for cross-platform compatibility (e.g., Windows with Git Bash)
     interpreter = ["bash", "-c"]
   }
 }
 
-data "archive_file" "stock_lambda" {
-  type        = "zip"
-  source_file = "${path.module}/../python/StockAnalyzer.py"
-  output_path = "${path.module}/../python/StockAnalyzer.zip"
-}
-
-resource "aws_lambda_layer_version" "stock_lambda" {
-  depends_on          = [null_resource.lambda_layer_packer]
-  layer_name          = "${var.lambda_name}-Dependencies"
-  filename            = "${path.module}/../python/dependencies.zip"
-  source_code_hash    = null_resource.lambda_layer_packer.triggers.requirements_hash
-  compatible_runtimes = ["python3.12"]
-}
-
-
 resource "aws_lambda_function" "stock_lambda" {
   function_name = "${var.account_identifier}-${var.lambda_name}"
   role          = aws_iam_role.stock_lambda.arn
-  handler       = "StockAnalyzer.test" # File.function_name
+  handler       = "StockAnalyzer.lambda_handler" # File.function_name
   runtime       = "python3.12"
   timeout       = 30 # Seconds
 
-  filename         = data.archive_file.stock_lambda.output_path
-  source_code_hash = data.archive_file.stock_lambda.output_base64sha256
+  filename         = "${path.module}/../python/StockAnalyzer.zip"
+  source_code_hash = null_resource.lambda_layer_packer.triggers.source_code_hash
 
-  layers = [aws_lambda_layer_version.stock_lambda.arn]
   environment { # TODO: add env variables
     variables = {
       "STOCK_SYMBOLS"       = var.stock_symbols

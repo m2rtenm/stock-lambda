@@ -4,7 +4,7 @@ data "aws_iam_policy_document" "stock_lambda" {
     effect = "Allow"
     actions = [
       "logs:CreateLogGroup",
-      "logs_CreateLogStream",
+      "logs:CreateLogStream",
       "logs:PutEvents"
     ]
     resources = ["arn:aws:logs:*:*:*"]
@@ -19,6 +19,7 @@ data "aws_iam_policy_document" "stock_lambda" {
 
   statement {
     sid = "DynamoDB"
+    effect = "Allow"
     actions = [
       "dynamodb:GetItem",
       "dynamodb:PutItem",

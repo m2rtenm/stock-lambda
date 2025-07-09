@@ -38,3 +38,4 @@ terraform.rc
 
 # Python virtual env folder 
 .venv/
+package/
