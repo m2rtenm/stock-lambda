@@ -18,7 +18,7 @@ data "aws_iam_policy_document" "stock_lambda" {
   }
 
   statement {
-    sid = "DynamoDB"
+    sid    = "DynamoDB"
     effect = "Allow"
     actions = [
       "dynamodb:GetItem",

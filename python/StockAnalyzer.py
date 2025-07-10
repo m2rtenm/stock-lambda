@@ -24,7 +24,7 @@ STOCK_SYMBOLS = os.environ.get('STOCK_SYMBOLS', 'AAPL,GOOG,TSLA').split(',')
 SNS_TOPIC_ARN = os.environ.get('SNS_TOPIC_ARN')
 THRESHOLD_PERCENT = float(os.environ.get('THRESHOLD_PERCENT'))
 DYNAMODB_TABLE_NAME = os.environ.get('DYNAMODB_TABLE_NAME') # New: Table for storing state
-AWS_REGION = os.environ.get('AWS_REGION')
+REGION = os.environ.get('REGION')
 
 # --- AWS CLIENTS ---
 # Initialize AWS clients outside the handler for reuse

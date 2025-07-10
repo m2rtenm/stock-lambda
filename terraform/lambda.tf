@@ -1,36 +1,74 @@
-resource "null_resource" "lambda_layer_packer" {
-  # These triggers tell Terraform to re-run this resource if the source files change.
-  triggers = {
-    source_code_hash  = filebase64sha256("${path.module}/../python/StockAnalyzer.py")
-    requirements_hash = filebase64sha256("${path.module}/../python/requirements.txt")
-  }
-
-  # This provisioner runs local shell commands to create the package.
+resource "null_resource" "yfinance_layer" {
   provisioner "local-exec" {
-    # These commands are run from your 'terraform' directory.
     command = <<-EOT
-      echo "--- Packaging Lambda function ---"
-      PACKAGE_DIR="../python/package"
-      ZIP_FILE="../python/StockAnalyzer.zip"
-      
-      # Clean up previous package to ensure a fresh build
-      rm -rf $PACKAGE_DIR
-      rm -f $ZIP_FILE
-      
-      # Create package directory and install dependencies from requirements.txt
-      mkdir -p $PACKAGE_DIR
-      pip install -r ../python/requirements.txt -t $PACKAGE_DIR --quiet
-      
-      # Copy your source code into the package
-      cp ../python/StockAnalyzer.py $PACKAGE_DIR/
-      
-      # Create the zip file from within the package directory
-      cd $PACKAGE_DIR && zip -r $ZIP_FILE . -q
-      echo "--- Packaging complete ---"
+      echo "--- Installing yfinance (no deps) ---"
+      LAYER_DIR="./../python/build/yfinance/python"
+      rm -rf "$LAYER_DIR"
+      mkdir -p "$LAYER_DIR"
+      pip install yfinance --no-deps -t "$LAYER_DIR"
+      cd "./../python/build/yfinance"
+      python3 -c 'import shutil; shutil.make_archive("../python/yfinance-layer", "zip", ".")'
     EOT
-    # Using bash is recommended for cross-platform compatibility (e.g., Windows with Git Bash)
+  }
+}
+
+data "archive_file" "yfinance_layer_zip" {
+  type        = "zip"
+  source_dir  = "${path.module}/../python/build/yfinance"
+  output_path = "${path.module}/../python/yfinance-layer.zip"
+  depends_on  = [null_resource.yfinance_layer]
+}
+
+resource "aws_lambda_layer_version" "yfinance" {
+  layer_name          = "${var.lambda_name}-yfinance"
+  filename            = data.archive_file.yfinance_layer_zip.output_path
+  source_code_hash    = data.archive_file.yfinance_layer_zip.output_base64sha256
+  compatible_runtimes = ["python3.12"]
+}
+
+resource "null_resource" "deps_layer" {
+  provisioner "local-exec" {
+    command = <<-EOT
+      echo "--- Installing dependencies ---"
+      LAYER_DIR="./../python/build/deps/python"
+      rm -rf "$LAYER_DIR"
+      mkdir -p "$LAYER_DIR"
+      pip install pandas numpy requests -t "$LAYER_DIR"
+      cd "./../python/build/deps"
+      python3 -c 'import shutil; shutil.make_archive("../python/deps-layer", "zip", ".")'
+    EOT
+  }
+}
+
+data "archive_file" "deps_layer_zip" {
+  type        = "zip"
+  source_dir  = "${path.module}/../python/build/deps"
+  output_path = "${path.module}/../python/deps-layer.zip"
+  depends_on  = [null_resource.deps_layer]
+}
+
+resource "aws_lambda_layer_version" "dependencies" {
+  layer_name          = "${var.lambda_name}-deps"
+  filename            = data.archive_file.deps_layer_zip.output_path
+  source_code_hash    = data.archive_file.deps_layer_zip.output_base64sha256
+  compatible_runtimes = ["python3.12"]
+}
+
+
+resource "null_resource" "build_function" {
+  provisioner "local-exec" {
+    command     = <<-EOT
+      zip -j "${path.module}/../python/StockAnalyzer.zip" "${path.module}/../python/StockAnalyzer.py" > /dev/null
+    EOT
     interpreter = ["bash", "-c"]
   }
+}
+
+data "archive_file" "function_zip" {
+  type        = "zip"
+  source_file = "${path.module}/../python/StockAnalyzer.py"
+  output_path = "${path.module}/../python/StockAnalyzer.zip"
+  depends_on  = [null_resource.build_function]
 }
 
 resource "aws_lambda_function" "stock_lambda" {
@@ -40,8 +78,13 @@ resource "aws_lambda_function" "stock_lambda" {
   runtime       = "python3.12"
   timeout       = 30 # Seconds
 
-  filename         = "${path.module}/../python/StockAnalyzer.zip"
-  source_code_hash = null_resource.lambda_layer_packer.triggers.source_code_hash
+  filename         = data.archive_file.function_zip.output_path
+  source_code_hash = data.archive_file.function_zip.output_base64sha256
+
+  layers = [
+    aws_lambda_layer_version.dependencies.arn,
+    aws_lambda_layer_version.yfinance.arn
+  ]
 
   environment { # TODO: add env variables
     variables = {
@@ -49,7 +92,7 @@ resource "aws_lambda_function" "stock_lambda" {
       "SNS_TOPIC_ARN"       = aws_sns_topic.stock_lambda.arn
       "THRESHOLD_PERCENT"   = var.threshold_percent
       "DYNAMODB_TABLE_NAME" = aws_dynamodb_table.stock_prices.name
-      "AWS_REGION"          = var.region
+      "REGION"              = var.region
     }
   }
 }
