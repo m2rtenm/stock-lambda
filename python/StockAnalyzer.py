@@ -51,7 +51,7 @@ def get_previous_price(symbol, table_name):
         if 'Item' in response:
             # Price is stored as a Number ('N') type in DynamoDB
             price = float(response['Item']['price']['N'])
-            print(f"Found previous price for {symbol}: ${price:.2f}")
+            print(f"Found previous price for {symbol}: ${price}")
             return price
         else:
             print(f"No previous price found for {symbol}. Will establish a baseline on this run.")
