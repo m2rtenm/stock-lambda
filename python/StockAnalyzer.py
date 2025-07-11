@@ -4,8 +4,13 @@
 
 import json
 import os
+import subprocess
+import sys
 import boto3
 from decimal import Decimal # Use Decimal for currency to avoid float inaccuracies
+
+subprocess.check_call([sys.executable, "-m", "pip", "install", "--target", "/tmp", 'yfinance'])
+sys.path.append('/tmp')
 
 # --- IMPORTANT DEPLOYMENT NOTE ---
 # The 'yfinance' and 'pandas' libraries are not included in the AWS Lambda
