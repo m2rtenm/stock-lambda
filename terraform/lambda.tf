@@ -19,12 +19,12 @@ resource "aws_lambda_function" "stock_lambda" {
   role          = aws_iam_role.stock_lambda.arn
   handler       = "StockAnalyzer.lambda_handler" # File.function_name
   runtime       = "python3.12"
-  timeout       = 30 # Seconds
+  timeout       = 180 # Seconds
 
   filename         = data.archive_file.function_zip.output_path
   source_code_hash = data.archive_file.function_zip.output_base64sha256
 
-  memory_size = 256
+  memory_size = 256 # MB
 
   environment {
     variables = {
