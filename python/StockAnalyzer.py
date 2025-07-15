@@ -8,6 +8,8 @@ import subprocess
 import sys
 import boto3
 from decimal import Decimal # Use Decimal for currency to avoid float inaccuracies
+from datetime import datetime, timezone
+
 
 subprocess.check_call([sys.executable, "-m", "pip", "install", "--target", "/tmp", 'yfinance'])
 sys.path.append('/tmp')
@@ -25,10 +27,11 @@ except ImportError:
 
 # --- CONFIGURATION ---
 # Load configuration from Lambda environment variables
-STOCK_SYMBOLS = os.environ.get('STOCK_SYMBOLS', 'AAPL,GOOG,TSLA').split(',')
+STOCK_SYMBOLS = [s.strip() for s in os.environ.get('STOCK_SYMBOLS', 'AAPL,GOOG,TSLA').split(',')]
 SNS_TOPIC_ARN = os.environ.get('SNS_TOPIC_ARN')
 THRESHOLD_PERCENT = float(os.environ.get('THRESHOLD_PERCENT'))
-DYNAMODB_TABLE_NAME = os.environ.get('DYNAMODB_TABLE_NAME') # New: Table for storing state
+MIN_PERCENT_INCREASE = float(os.environ.get('MIN_PERCENT_INCREASE'))
+DYNAMODB_TABLE_NAME = os.environ.get('DYNAMODB_TABLE_NAME')
 REGION = os.environ.get('REGION')
 
 # --- AWS CLIENTS ---
@@ -36,154 +39,129 @@ REGION = os.environ.get('REGION')
 sns_client = boto3.client('sns')
 dynamodb_client = boto3.client('dynamodb')
 
-# --- HELPER FUNCTIONS ---
-
-def get_previous_price(symbol, table_name):
-    """Retrieves the last recorded price for a given stock symbol from DynamoDB."""
-    if not table_name:
-        print("ERROR: DYNAMODB_TABLE_NAME environment variable not set.")
-        return None
+def get_notification_record(symbol):
+    """Retrieve last notification record for the symbol from DynamoDB."""
     try:
         response = dynamodb_client.get_item(
-            TableName=table_name,
+            TableName=DYNAMODB_TABLE_NAME,
             Key={'symbol': {'S': symbol}}
         )
         if 'Item' in response:
-            # Price is stored as a Number ('N') type in DynamoDB
-            price = float(response['Item']['price']['N'])
-            print(f"Found previous price for {symbol}: ${price}")
-            return price
-        else:
-            print(f"No previous price found for {symbol}. Will establish a baseline on this run.")
-            return None
+            item = response['Item']
+            last_notified_date = item.get('last_notified_date', {}).get('S')
+            last_percent_diff = float(item.get('last_percent_diff', {}).get('N', '0'))
+            return last_notified_date, last_percent_diff
+        return None, None
     except Exception as e:
-        print(f"ERROR: Could not get item from DynamoDB for {symbol}. {e}")
-        # Fail gracefully, will just skip analysis for this symbol on this run
-        return None
+        print(f"ERROR: Failed to get notification record for {symbol} from DynamoDB: {e}")
+        return None, None
 
-def store_current_price(symbol, price, table_name):
-    """Stores the current price in DynamoDB for the next execution."""
-    if not table_name:
-        print("ERROR: DYNAMODB_TABLE_NAME environment variable not set.")
-        return
+def store_notification_record(symbol, percent_diff):
+    """Store notification info in DynamoDB with TTL set to midnight UTC next day."""
     try:
-        # Use Decimal for floating point precision as is best practice for currency
-        price_decimal = Decimal(str(price))
+        now = datetime.now(timezone.utc)
+        # Set TTL to midnight UTC next day to reset daily
+        midnight_next_day = datetime(year=now.year, month=now.month, day=now.day, tzinfo=timezone.utc) + timedelta(days=1)
+        ttl = int(midnight_next_day.timestamp())
+
         dynamodb_client.put_item(
-            TableName=table_name,
+            TableName=DYNAMODB_TABLE_NAME,
             Item={
                 'symbol': {'S': symbol},
-                # DynamoDB expects numbers as strings when using the low-level client
-                'price': {'N': str(price_decimal)}
+                'last_notified_date': {'S': now.strftime('%Y-%m-%d')},
+                'last_percent_diff': {'N': str(percent_diff)},
+                'ttl': {'N': str(ttl)}
             }
         )
-        print(f"Stored/updated price for {symbol} to ${price:.2f}")
+        print(f"Stored notification record for {symbol} with percent_diff={percent_diff:.2f}% and TTL={ttl}")
     except Exception as e:
-        print(f"ERROR: Could not put item to DynamoDB for {symbol}. {e}")
+        print(f"ERROR: Failed to store notification record for {symbol} in DynamoDB: {e}")
 
-def get_current_stock_data(symbol):
-    """Fetches the latest stock price using yfinance."""
-    if not yf:
-        print("yfinance library is not available.")
-        return None
-    try:
-        print(f"Fetching current data for {symbol} using yfinance...")
-        ticker = yf.Ticker(symbol)
-        # Get historical data for the last day to get the most recent closing price.
-        hist = ticker.history(period="1d")
-        if hist.empty:
-            print(f"WARN: Could not retrieve current price for {symbol}.")
-            return None
-        latest_price = hist['Close'][-1]
-        return { "symbol": symbol, "latest_price": latest_price }
-    except Exception as e:
-        print(f"ERROR: Failed to fetch data for {symbol} with yfinance. {e}")
-        return None
+def send_notification(symbol, first_price, last_price, percent_change):
+    """Send SNS notification about price change."""
+    trend = "UP" if percent_change > 0 else "DOWN"
+    action = "consider selling" if trend == "UP" else "consider buying"
 
-def send_notification(analysis_result):
-    """Sends a formatted message to the SNS topic."""
-    symbol = analysis_result['symbol']
-    price = analysis_result['latest_price']
-    change = analysis_result['percent_change']
-    previous_price = analysis_result['previous_price']
-
-    trend = "UP" if change > 0 else "DOWN"
-    action = "consider selling" if trend == "UP" else "becoming a buying opportunity"
-
-    subject = f"Stock Alert: {symbol} is {trend} {abs(change):.2f}% since last check"
-
+    subject = f"Stock Alert: {symbol} is {trend} {abs(percent_change)}% since start of day"
     message = (
-        f"Significant price movement detected for {symbol} since the last check.\n\n"
-        f"Symbol: {symbol}\n"
-        f"Previous Price: ${previous_price:.2f}\n"
-        f"Current Price: ${price:.2f}\n"
-        f"Change since last execution: {change:.2f}%\n\n"
-        f"This move exceeds your threshold of {THRESHOLD_PERCENT}% and may indicate it's time to {action}.\n\n"
-        f"Disclaimer: This is an automated notification and not financial advice."
+        f"Significant price movement detected for {symbol}.\n\n"
+        f"Start Price: ${first_price:.2f}\n"
+        f"Current Price: ${last_price:.2f}\n"
+        f"Change since start of day: {percent_change:.2f}%\n\n"
+        f"This move exceeds your threshold of {THRESHOLD_PERCENT}% and the minimum increase of {MIN_PERCENT_INCREASE}% since last notification.\n"
+        f"You may want to {action}.\n\n"
+        f"Disclaimer: Automated notification, not financial advice."
     )
-
     try:
-        print(f"Sending notification for {symbol} to SNS topic: {SNS_TOPIC_ARN}")
-        sns_client.publish(
-            TopicArn=SNS_TOPIC_ARN,
-            Message=message,
-            Subject=subject
-        )
+        sns_client.publish(TopicArn=SNS_TOPIC_ARN, Message=message, Subject=subject)
+        print(f"Sent notification for {symbol}")
     except Exception as e:
-        print(f"ERROR: Failed to publish message to SNS. {e}")
+        print(f"ERROR: Failed to send SNS notification for {symbol}: {e}")
 
-# --- MAIN HANDLER ---
+def analyze_symbol(symbol):
+    """Analyze price changes for one symbol and decide if notification is needed."""
+    if not yf:
+        print("yfinance not available, skipping.")
+        return False
+
+    print(f"Fetching 1d 1m interval data for {symbol}...")
+    try:
+        df = yf.download(symbol, period='1d', interval='1m', progress=True, auto_adjust=True)
+        if df.empty:
+            print(f"No data returned for {symbol}")
+            return False
+    except Exception as e:
+        print(f"Error downloading data for {symbol}: {e}")
+        return False
+
+    # Use Close prices
+    closes = df['Close']
+    first_price = closes.iloc[0].item()
+    last_price = closes.iloc[-1].item()
+
+    if first_price == 0:
+        print(f"Invalid first price for {symbol}, skipping")
+        return False
+
+    percent_change = ((last_price - first_price) / first_price) * 100
+    print(f"{symbol} price change since start of day: {percent_change:.2f}%")
+
+    if abs(percent_change) < THRESHOLD_PERCENT:
+        print(f"Change {percent_change:.2f}% below threshold {THRESHOLD_PERCENT}%, no notification.")
+        return False
+
+    # Check DynamoDB for last notification info
+    last_notified_date, last_percent_diff = get_notification_record(symbol)
+    today_str = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+
+    if last_notified_date == today_str:
+        # Already notified today, check if new percent change is at least MIN_PERCENT_INCREASE above last percent diff
+        diff_since_last = abs(percent_change) - abs(last_percent_diff)
+        print(f"Already notified today. Change since last notification: {diff_since_last:.2f}%")
+        if diff_since_last < MIN_PERCENT_INCREASE:
+            print(f"Increase less than minimum {MIN_PERCENT_INCREASE}%, skipping notification.")
+            return False
+        else:
+            print(f"Increase above minimum {MIN_PERCENT_INCREASE}%, sending notification.")
+
+    # Send notification and update DynamoDB
+    send_notification(symbol, first_price, last_price, percent_change)
+    store_notification_record(symbol, percent_change)
+    return True
 
 def lambda_handler(event, context):
-    """
-    The main entry point for the Lambda function.
-    Triggered by EventBridge.
-    """
-    print("--- Stock Analyzer Function (Stateful) Started ---")
+    print("--- Stock Analyzer Lambda (Stateful) Started ---")
+
+    print(f"DEBUG: DYNAMODB_TABLE_NAME = {DYNAMODB_TABLE_NAME}")
 
     notifications_sent = 0
     for symbol in STOCK_SYMBOLS:
-        symbol = symbol.strip()
-        if not symbol:
-            continue
+        notified = analyze_symbol(symbol)
+        if notified:
+            notifications_sent += 1
 
-        # 1. Get current market price
-        current_data = get_current_stock_data(symbol)
-        if not current_data:
-            continue # Skip if yfinance fails for this symbol
-        
-        latest_price = current_data['latest_price']
-
-        # 2. Get the price from the last execution
-        previous_price = get_previous_price(symbol, DYNAMODB_TABLE_NAME)
-
-        # 3. Analyze and notify if we have a previous price to compare against
-        if previous_price is not None:
-            # We have a baseline to compare against
-            change = latest_price - previous_price
-            percent_change = (change / previous_price) * 100 if previous_price != 0 else 0
-            
-            print(f"Analyzed {symbol}: Current=${latest_price:.2f}, Previous=${previous_price:.2f}, Change={percent_change:.2f}%")
-            
-            # Check if the absolute change exceeds our threshold
-            if abs(percent_change) >= THRESHOLD_PERCENT:
-                print(f"ALERT: {symbol} change {percent_change:.2f}% exceeds threshold.")
-                analysis_result = {
-                    "symbol": symbol,
-                    "latest_price": latest_price,
-                    "previous_price": previous_price,
-                    "percent_change": percent_change
-                }
-                send_notification(analysis_result)
-                notifications_sent += 1
-        
-        # 4. Always store the latest price for the *next* execution
-        # This updates the baseline regardless of whether a notification was sent.
-        store_current_price(symbol, latest_price, DYNAMODB_TABLE_NAME)
-
-    print(f"--- Stock Analyzer Function Finished. {notifications_sent} notifications sent. ---")
-    
+    print(f"--- Finished. Notifications sent: {notifications_sent} ---")
     return {
         'statusCode': 200,
-        'body': json.dumps(f'Analysis complete. {notifications_sent} notifications sent.')
+        'body': json.dumps(f'Notifications sent: {notifications_sent}')
     }

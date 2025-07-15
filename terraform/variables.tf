@@ -24,3 +24,7 @@ variable "stock_symbols" {
 variable "threshold_percent" {
   type = number
 }
+
+variable "min_percent_increase" {
+  type = number
+}

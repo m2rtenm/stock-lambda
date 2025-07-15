@@ -28,11 +28,12 @@ resource "aws_lambda_function" "stock_lambda" {
 
   environment {
     variables = {
-      "STOCK_SYMBOLS"       = var.stock_symbols
-      "SNS_TOPIC_ARN"       = aws_sns_topic.stock_lambda.arn
-      "THRESHOLD_PERCENT"   = var.threshold_percent
-      "DYNAMODB_TABLE_NAME" = aws_dynamodb_table.stock_prices.name
-      "REGION"              = var.region
+      "STOCK_SYMBOLS"        = var.stock_symbols
+      "SNS_TOPIC_ARN"        = aws_sns_topic.stock_lambda.arn
+      "THRESHOLD_PERCENT"    = var.threshold_percent
+      "MIN_PERCENT_INCREASE" = var.min_percent_increase
+      "DYNAMODB_TABLE_NAME"  = aws_dynamodb_table.stock_prices.name
+      "REGION"               = var.region
     }
   }
 }

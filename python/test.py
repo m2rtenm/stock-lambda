@@ -19,7 +19,7 @@ import time
 #         last_price = new_price
 
 def analyze_price_change(ticker):
-    stock = yf.download(ticker, period="1d", interval="1m", group_by='column')
+    stock = yf.download(ticker, period="1d", interval="1m", group_by='column', progress=False, auto_adjust=True)
 
     if stock.empty:
         print(f"No data for {ticker}")
@@ -42,12 +42,13 @@ def analyze_price_change(ticker):
     percent_change = (absolute_change / first_price) * 100
 
     print(f"--- {ticker} Price Change Analysis ---")
-    print(f"Start Time:  {first_timestamp} | Start Price: ${first_price:.2f}")
-    print(f"End Time:    {last_timestamp} | End Price:   ${last_price:.2f}")
-    print(f"Change:      ${absolute_change:.2f} ({percent_change:.2f}%)")
+    print(f"Start Time:  {first_timestamp} | Start Price: ${first_price}")
+    print(f"End Time:    {last_timestamp} | End Price:   ${last_price}")
+    print(f"Change:      ${absolute_change} ({percent_change}%)")
 
 # Run it
 analyze_price_change("NVDA")
+analyze_price_change("AAPL")
 
 #check_stock_change("NVDA", interval_seconds=5, threshold_pct=2.0)
 
