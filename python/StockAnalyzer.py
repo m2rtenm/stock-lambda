@@ -7,26 +7,17 @@ import os
 import subprocess
 import sys
 import boto3
-from decimal import Decimal # Use Decimal for currency to avoid float inaccuracies
-from datetime import datetime, timezone
+from decimal import Decimal
+from datetime import datetime, timezone, timedelta
 
+# Install required packages if not packaged
+subprocess.check_call([sys.executable, "-m", "pip", "install", "--target", "/tmp", "yfinance"])
+sys.path.append("/tmp")
 
-subprocess.check_call([sys.executable, "-m", "pip", "install", "--target", "/tmp", 'yfinance'])
-sys.path.append('/tmp')
-
-# --- IMPORTANT DEPLOYMENT NOTE ---
-# The 'yfinance' and 'pandas' libraries are not included in the AWS Lambda
-# runtime. You must package them with your function into a .zip file.
-try:
-    import yfinance as yf
-    import pandas as pd
-except ImportError:
-    print("ERROR: 'yfinance' or 'pandas' not found. Please package them with the Lambda function.")
-    yf = None
-    pd = None
+import yfinance as yf
+import pandas as pd
 
 # --- CONFIGURATION ---
-# Load configuration from Lambda environment variables
 STOCK_SYMBOLS = [s.strip() for s in os.environ.get('STOCK_SYMBOLS', 'AAPL,GOOG,TSLA').split(',')]
 SNS_TOPIC_ARN = os.environ.get('SNS_TOPIC_ARN')
 THRESHOLD_PERCENT = float(os.environ.get('THRESHOLD_PERCENT'))
@@ -34,13 +25,22 @@ MIN_PERCENT_INCREASE = float(os.environ.get('MIN_PERCENT_INCREASE'))
 DYNAMODB_TABLE_NAME = os.environ.get('DYNAMODB_TABLE_NAME')
 REGION = os.environ.get('REGION')
 
-# --- AWS CLIENTS ---
-# Initialize AWS clients outside the handler for reuse
+# AWS Clients
 sns_client = boto3.client('sns')
 dynamodb_client = boto3.client('dynamodb')
 
+
+def is_market_open():
+    '''Check if Europe's stock market is open'''
+    now = datetime.now(timezone.utc)
+    if now.weekday() >= 5: # Mon is 0
+        return False
+    market_open = now.replace(hour=8, minute=0, second=0, microsecond=0)
+    market_close = now.replace(hour=16, minute=30, second=0, microsecond=0)
+    return market_open <= now <= market_close
+
+
 def get_notification_record(symbol):
-    """Retrieve last notification record for the symbol from DynamoDB."""
     try:
         response = dynamodb_client.get_item(
             TableName=DYNAMODB_TABLE_NAME,
@@ -53,14 +53,13 @@ def get_notification_record(symbol):
             return last_notified_date, last_percent_diff
         return None, None
     except Exception as e:
-        print(f"ERROR: Failed to get notification record for {symbol} from DynamoDB: {e}")
+        print(f"ERROR: Failed to get record for {symbol}: {e}")
         return None, None
 
+
 def store_notification_record(symbol, percent_diff):
-    """Store notification info in DynamoDB with TTL set to midnight UTC next day."""
     try:
         now = datetime.now(timezone.utc)
-        # Set TTL to midnight UTC next day to reset daily
         midnight_next_day = datetime(year=now.year, month=now.month, day=now.day, tzinfo=timezone.utc) + timedelta(days=1)
         ttl = int(midnight_next_day.timestamp())
 
@@ -73,94 +72,102 @@ def store_notification_record(symbol, percent_diff):
                 'ttl': {'N': str(ttl)}
             }
         )
-        print(f"Stored notification record for {symbol} with percent_diff={percent_diff:.2f}% and TTL={ttl}")
+        print(f"Stored record for {symbol}, TTL={ttl}")
     except Exception as e:
-        print(f"ERROR: Failed to store notification record for {symbol} in DynamoDB: {e}")
+        print(f"ERROR: Failed to store record for {symbol}: {e}")
+
 
 def send_notification(symbol, first_price, last_price, percent_change):
-    """Send SNS notification about price change."""
     trend = "UP" if percent_change > 0 else "DOWN"
     action = "consider selling" if trend == "UP" else "consider buying"
+    now_utc = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
 
-    subject = f"Stock Alert: {symbol} is {trend} {abs(percent_change)}% since start of day"
+    subject = f"Stock Alert: {symbol} {trend} {abs(percent_change):.2f}%"
     message = (
-        f"Significant price movement detected for {symbol}.\n\n"
+        f"[{now_utc}]\n"
+        f"{symbol} has moved significantly since market open.\n\n"
         f"Start Price: ${first_price:.2f}\n"
         f"Current Price: ${last_price:.2f}\n"
-        f"Change since start of day: {percent_change:.2f}%\n\n"
-        f"This move exceeds your threshold of {THRESHOLD_PERCENT}% and the minimum increase of {MIN_PERCENT_INCREASE}% since last notification.\n"
-        f"You may want to {action}.\n\n"
-        f"Disclaimer: Automated notification, not financial advice."
+        f"Change: {percent_change:.2f}%\n\n"
+        f"Threshold: {THRESHOLD_PERCENT}%\n"
+        f"Change since last alert: {MIN_PERCENT_INCREASE}%\n"
+        f"Suggested Action: {action}\n\n"
+        f"Note: This is an automated alert. Not financial advice."
     )
     try:
         sns_client.publish(TopicArn=SNS_TOPIC_ARN, Message=message, Subject=subject)
-        print(f"Sent notification for {symbol}")
+        print(f"✅ Sent notification for {symbol}")
     except Exception as e:
-        print(f"ERROR: Failed to send SNS notification for {symbol}: {e}")
+        print(f"ERROR: Failed to send notification for {symbol}: {e}")
+
 
 def analyze_symbol(symbol):
-    """Analyze price changes for one symbol and decide if notification is needed."""
-    if not yf:
-        print("yfinance not available, skipping.")
-        return False
+    print(f"Analyzing {symbol}...")
 
-    print(f"Fetching 1d 1m interval data for {symbol}...")
     try:
-        df = yf.download(symbol, period='1d', interval='1m', progress=True, auto_adjust=True)
+        df = yf.download(symbol, period='1d', interval='1m', progress=False, auto_adjust=True)
         if df.empty:
-            print(f"No data returned for {symbol}")
+            print(f"No data for {symbol}, skipping.")
             return False
     except Exception as e:
-        print(f"Error downloading data for {symbol}: {e}")
+        print(f"ERROR: Could not fetch data for {symbol}: {e}")
         return False
 
-    # Use Close prices
     closes = df['Close']
     first_price = closes.iloc[0].item()
     last_price = closes.iloc[-1].item()
 
     if first_price == 0:
-        print(f"Invalid first price for {symbol}, skipping")
+        print(f"Invalid start price for {symbol}, skipping.")
+        return False
+
+    # Ensure data isn't stale
+    last_timestamp = closes.index[-1].to_pydatetime().replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    age_minutes = (now - last_timestamp).total_seconds() / 60
+    if age_minutes > 5:
+        print(f"Stale data ({age_minutes:.2f} min old) for {symbol}, skipping.")
         return False
 
     percent_change = ((last_price - first_price) / first_price) * 100
-    print(f"{symbol} price change since start of day: {percent_change:.2f}%")
+    print(f"{symbol}: {percent_change:.2f}% change since open")
 
     if abs(percent_change) < THRESHOLD_PERCENT:
-        print(f"Change {percent_change:.2f}% below threshold {THRESHOLD_PERCENT}%, no notification.")
+        print(f"Below threshold ({THRESHOLD_PERCENT}%), no alert.")
         return False
 
-    # Check DynamoDB for last notification info
+    today_str = now.strftime('%Y-%m-%d')
     last_notified_date, last_percent_diff = get_notification_record(symbol)
-    today_str = datetime.now(timezone.utc).strftime('%Y-%m-%d')
 
     if last_notified_date == today_str:
-        # Already notified today, check if new percent change is at least MIN_PERCENT_INCREASE above last percent diff
         diff_since_last = abs(percent_change) - abs(last_percent_diff)
-        print(f"Already notified today. Change since last notification: {diff_since_last:.2f}%")
         if diff_since_last < MIN_PERCENT_INCREASE:
-            print(f"Increase less than minimum {MIN_PERCENT_INCREASE}%, skipping notification.")
+            print(f"Change since last alert: {diff_since_last:.2f}%. Not enough. Skipping.")
             return False
         else:
-            print(f"Increase above minimum {MIN_PERCENT_INCREASE}%, sending notification.")
+            print(f"Change since last alert: {diff_since_last:.2f}%. Sending new alert.")
 
-    # Send notification and update DynamoDB
     send_notification(symbol, first_price, last_price, percent_change)
     store_notification_record(symbol, percent_change)
     return True
 
-def lambda_handler(event, context):
-    print("--- Stock Analyzer Lambda (Stateful) Started ---")
 
-    print(f"DEBUG: DYNAMODB_TABLE_NAME = {DYNAMODB_TABLE_NAME}")
+def lambda_handler(event, context):
+    print("=== StockAnalyzer Lambda Started (UTC) ===")
+
+    if not is_market_open():
+        print("Market is closed. Skipping analysis.")
+        return {
+            'statusCode': 200,
+            'body': json.dumps('Market is closed. No analysis performed.')
+        }
 
     notifications_sent = 0
     for symbol in STOCK_SYMBOLS:
-        notified = analyze_symbol(symbol)
-        if notified:
+        if analyze_symbol(symbol):
             notifications_sent += 1
 
-    print(f"--- Finished. Notifications sent: {notifications_sent} ---")
+    print(f"Analysis complete. Notifications sent: {notifications_sent}")
     return {
         'statusCode': 200,
         'body': json.dumps(f'Notifications sent: {notifications_sent}')
