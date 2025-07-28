@@ -25,8 +25,8 @@ def is_market_open_europe():
     # Assume market is open Mon-Fri, 09:00–17:30 CET/CEST (Europe/Estonia time assumed as local)
     if now.weekday() >= 5:  # Sat/Sun
         return False
-    market_open = now.replace(hour=9, minute=0, second=0, microsecond=0)
-    market_close = now.replace(hour=17, minute=30, second=0, microsecond=0)
+    market_open = now.replace(hour=10, minute=0, second=0, microsecond=0)
+    market_close = now.replace(hour=18, minute=30, second=0, microsecond=0)
     return market_open <= now <= market_close
 
 def get_notification_record(symbol):
@@ -71,8 +71,8 @@ def analyze_symbol(symbol):
         return False
 
     closes = df['Close']
-    first_price = closes.iloc[0]
-    last_price = closes.iloc[-1]
+    first_price = float(closes.iloc[0])
+    last_price = float(closes.iloc[-1])
 
     if first_price == 0:
         print(f"Invalid open price for {symbol}")
