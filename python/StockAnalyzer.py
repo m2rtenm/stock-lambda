@@ -4,15 +4,9 @@
 
 import json
 import os
-import subprocess
-import sys
 import boto3
 from decimal import Decimal
 from datetime import datetime, timezone, timedelta
-
-# Install required packages if not packaged
-subprocess.check_call([sys.executable, "-m", "pip", "install", "--target", "/tmp", "yfinance"])
-sys.path.append("/tmp")
 
 import yfinance as yf
 import pandas as pd

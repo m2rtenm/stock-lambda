@@ -40,4 +40,5 @@ terraform.rc
 .venv/
 build/
 python/**/*.zip
+python/package/
 .env

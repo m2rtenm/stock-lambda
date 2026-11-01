@@ -1,15 +1,18 @@
 resource "null_resource" "build_function" {
+  triggers = {
+    source_hash       = filesha256("${path.module}/../python/StockAnalyzer.py")
+    requirements_hash = filesha256("${path.module}/../python/lambda-requirements.txt")
+    build_script_hash = filesha256("${path.module}/../python/build_lambda.sh")
+  }
+
   provisioner "local-exec" {
-    command     = <<-EOT
-      zip -j "${path.module}/../python/StockAnalyzer.zip" "${path.module}/../python/StockAnalyzer.py" > /dev/null
-    EOT
-    interpreter = ["bash", "-c"]
+    command = "sh \"${path.module}/../python/build_lambda.sh\""
   }
 }
 
 data "archive_file" "function_zip" {
   type        = "zip"
-  source_file = "${path.module}/../python/StockAnalyzer.py"
+  source_dir  = "${path.module}/../python/package"
   output_path = "${path.module}/../python/StockAnalyzer.zip"
   depends_on  = [null_resource.build_function]
 }

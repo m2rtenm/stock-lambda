@@ -43,18 +43,14 @@ The function runs every **15 minutes** via Amazon EventBridge, storing daily sta
 
 ## 🚀 Deployment
 
-> **Note**: The Lambda function installs `yfinance` at runtime if not packaged, but for production you should bundle dependencies as described below.
-
 ### 1 · Bundle Code & Dependencies
 
-Terraform automatically zips [`python/StockAnalyzer.py`](python/StockAnalyzer.py) for Lambda deployment (see [`terraform/lambda.tf`](terraform/lambda.tf)).  
-For local packaging, use:
+Terraform builds the Lambda package from the hash-locked dependencies in [`python/lambda-requirements.txt`](python/lambda-requirements.txt) and [`python/StockAnalyzer.py`](python/StockAnalyzer.py) (see [`terraform/lambda.tf`](terraform/lambda.tf)). The build requires Python 3 and pip, and targets the Lambda Python 3.12 x86_64 runtime on Amazon Linux 2023.
+
+To build the package locally:
 
 ```bash
-python -m pip install -r python/requirements.txt -t python/package/
-cp python/StockAnalyzer.py python/package/
-cd python/package
-zip -r ../StockAnalyzer.zip .
+sh python/build_lambda.sh
 ```
 
 ### 2 · Deploy with Terraform
@@ -87,7 +83,5 @@ python python/DryRun.py
 ```
 
 ---
-
-
 
 
